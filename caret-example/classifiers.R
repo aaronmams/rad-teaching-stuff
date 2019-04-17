@@ -22,7 +22,7 @@ dat <- dat %>% ungroup() %>% mutate(length=as.factor(as.numeric(cut(length,5))),
 
 
 # make the data set smaller so we can deal with it
-df <- dat %>% filter(year(local_time)==2014 & month(local_time)==10) %>% 
+df <- dat %>% filter(month(local_time) %in% c(6,7,8,9,10)) %>% 
   select(foraging,speed,depth,length,hour,angle) %>%
   mutate(y=foraging) %>% select(-foraging)
 
@@ -39,9 +39,9 @@ df <- dat %>% filter(year(local_time)==2014 & month(local_time)==10) %>%
 #create the training and testing data
 index <- createDataPartition(df$y,p=0.8,list=F,times=1)
 df.train <- df[index,] %>% mutate(y=as.factor(y))
-levels(df.train$y) <- c('notfishing','fishing') 
+levels(df.train$y) <- c('notforaging','foraging') 
 df.test <- df[-index,] %>% mutate(y=as.factor(y))
-levels(df.test$y) <- c('notfishing','fishing')  
+levels(df.test$y) <- c('notforaging','foraging')  
 #--------------------------------------------------------------------
 
 #--------------------------------------------------------------------
@@ -51,7 +51,7 @@ fitControl <- trainControl(method = "cv",
                            classProbs = TRUE, 
                            summaryFunction = twoClassSummary)
 
-nnetGrid <-  expand.grid(size = seq(from = 1, to = 15, by = 1),
+nnetGrid <-  expand.grid(size = seq(from = 1, to = 10, by = 1),
                          decay = seq(from = 0.1, to = 0.5, by = 0.1))
 
 # set up control parameters for the GBM
@@ -67,12 +67,12 @@ testTransformed <- predict(preProcValues, df.test)
 #----------------------------------------------------------------------
 
 #----------------------------------------------------------------------
-# Train the model using 5-fold CV to choose the best model
+# Train the models
 t <- Sys.time()
 nnetFit <- train(y ~ ., 
-                 #data = trainTransformed,
-                 data = df.train,
+                 data = trainTransformed,
                  method = "nnet",
+                 preProcess=c('range'),
                  metric = "ROC",
                  trControl = fitControl,
                  tuneGrid = nnetGrid,
@@ -91,13 +91,12 @@ Sys.time() - t
 
 #-------------------------------------------------------------------------
 # make predictions
-NNpredictions <- predict(nnetFit,df.test)
-confmat <- confusionMatrix(NNpredictions,df.test$y)
+NNpredictions <- predict(nnetFit,testTransformed)
+confmat <- confusionMatrix(NNpredictions,testTransformed$y)
 
 GBMpredictions <- predict(gbmFit,df.test)
-#GBMpredictions <- predict(gbmFit,testTransformed)
 GBMmat <- confusionMatrix(GBMpredictions,df.test$y)
-#GBMmat <- confusionMatrix(GBMpredictions,testTransformed$y)
+
 
 #f1 score for the ANN
 p <- confmat$table[2,2]/(confmat$table[2,2] + confmat$table[2,1])

@@ -6,6 +6,7 @@ library(caret)
 library(nnet)
 library(lubridate)
 library(gbm)
+library(NeuralNetTools)
 
 dat <- tbl_df(read.csv('caret-example/data.csv')) %>%
          mutate(utc_date=as.POSIXct(utc_date,format="%Y-%m-%d %H:%M:%S",tz="UTC"),
@@ -51,7 +52,7 @@ fitControl <- trainControl(method = "cv",
                            classProbs = TRUE, 
                            summaryFunction = twoClassSummary)
 
-nnetGrid <-  expand.grid(size = seq(from = 1, to = 10, by = 1),
+nnetGrid <-  expand.grid(size = seq(from = 1, to = 15, by = 1),
                          decay = seq(from = 0.1, to = 0.5, by = 0.1))
 
 # set up control parameters for the GBM

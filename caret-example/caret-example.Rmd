@@ -1,0 +1,201 @@
+---
+title: "A Short Machine Learning Essay using the Caret Library"
+output: html_notebook
+---
+
+From the [Caret Bookdown by Max Kuhn](https://topepo.github.io/caret/index.html): 
+
+>The caret package (short for Classification And REgression Training) is a set of functions that attempt to streamline the process for creating predictive models. The package contains tools for:
+
+* data splitting
+* pre-processing
+* feature selection
+* model tuning using resampling
+* variable importance estimation
+
+>as well as other functionality.
+
+# Introduction
+
+In this notebook I will use R's [caret](http://caret.r-forge.r-project.org/) library to train two predictive models: an Artificial Neural Network and a Gradient Boosted Classification Tree.  The empirical setting is the following: I have locational data on fishing vessels from satellite tracking system logged at approximately hourly time intervals (polls) and I wish to fit a model capable of classifying an unlabeled observation according to whether the vessel was fishing or not fishing at the time of the poll.
+
+The primary purpose of this notebook is:
+
+to illustrate the usage of caret's train() method for training predictive models
+
+The secondary objectives is:
+
+to highlight how functions in the caret library can be combined to establish a machine learning pipeline including:
+
+1. pre-processing data (normalizing continuous variables, one-hot encoding)
+2. dealing with NAs or outliers
+3. examining final models visually
+
+## Dependencies
+
+* dplyr - for basic data manipulation
+* data.table - for list-to-data frame operations
+* ggplot2 - visuals
+* lubridate - dealing with date-times
+* nnet - neural networks
+* NeuralNetTools - for plotting nnet objects
+* gbm - stochastic gradient boosting
+* caret - training predictive models
+
+```{r warnings=F}
+library(dplyr)
+library(data.table)
+library(ggplot2)
+library(caret)
+library(nnet)
+library(lubridate)
+library(gbm)
+library(NeuralNetTools)
+```
+
+# Empirical Setting
+
+These data come from a satellite monitoring system that tracks the location of commercial fishing vessels in the U.S.  These data are logged on hourly intervals and record a vessels location in lat/long coordinates and a time stamp.  
+
+In a separate process I have joined these data with a bathymetry grid to get the ocean bottom depth associated with each set of lat/long coordinates.  I have also joined these data with a secondary data source containing captains logs recorded during fishing operations.  By joining the positional data with the captain's logs I was able to create a variable indicating whether the vessel was actively fishing during the time the observation was taken.
+
+I have also used the lat/long values and time-stamps to calculate derived fields for vessel speed and bearing in radians.
+
+Before uploading the data to GitHub I removed the actual lat/long values and vessel identifiers to protect confidential information.  
+
+```{r}
+df <- tbl_df(read.csv('fishing_data.csv')) %>%
+       mutate(utc_date=as.POSIXct(utc_date,format="%Y-%m-%d %H:%M:%S",tz='UTC'),
+              local_time=as.POSIXct(local_time,format="%Y-%m-%d %H:%M:%S"))
+str(df)
+```
+
+The object of the empirical exercise is to train a model capable of classifying an unlabeled observation as either "fishing" or "not fishing".  The features we have available for our modeling exercise are:
+
+* Outcome Variable/Target Variable
+    + fishing - A [0,1] variable indicating whether the vessel was fishing or not  
+
+* Inputs
+    + len - vessel length in feet
+    + boat - a unique vessel identifier
+    + hour - the hour of the day
+    + bearing.rad - bearing in radians
+    + speed - instantaneous speed
+    + bottom_depth - ocean bottom depth
+  
+# The Models
+
+I don't intend to discuss the particulars of ANNs and Gradient Boosting here.  I'm assuming a decent level of familiarity with these models and concepts so I can focus on the details of using the [caret](http://topepo.github.io/caret/index.html) library to train the models.  Check out the links below to dive into the models
+
+## ANNs
+
+[Watch this video](https://www.youtube.com/watch?v=Ilg3gGewQ5U) to get a really cool look at optimizing a neural network using the backpropagation algorithm.
+
+The cononical resource for all things machine learning [Hastie, Tibshirani, and Freidman](https://web.stanford.edu/~hastie/Papers/ESLII.pdf), Chapter 11.
+
+I also like [this ebook specifically on Neural Networks](http://www.dkriesel.com/_media/science/neuronalenetze-en-zeta2-2col-dkrieselcom.pdf) by David Kriesel.
+
+## GBM
+
+Again, a great place to start is [Hastie, Tibshirani, and Freidman](https://web.stanford.edu/~hastie/Papers/ESLII.pdf). Gradient Boosting isn't as well contained as Neural Networks and the concepts kind of pops up in a lot of places.  Chapter 10 is a pretty good place to start for readers interested in gradient boosting trees.
+
+[Here are some slides](https://homes.cs.washington.edu/~tqchen/pdf/BoostedTree.pdf) from a Computer Science Lecture at U. Washington that I think give a nice overview and reasonably rigorous presentation of GBM.
+ 
+
+# Training the Models with CARET
+
+For this example I'm going to do a couple things outside of the caret environment:
+
+1. make the vessel length and hour-of-day variables categorical.  I don't have a great reason for this, I just want some factor-type variables in my input space to make some points about caret.
+
+2. I'm going to cut down the data a bit so training the models doesn't take forever.
+
+Full disclosure: I think there should be a way to do the continuous-to-categorical variable tranformation within caret...but, if there is, I haven't figured it out yet.
+
+```{r}
+# just gonna make some of the continuous variables categorical
+df <- df %>% ungroup() %>% mutate(len=as.factor(as.numeric(cut(len,5))),
+                                    hour=as.factor(as.numeric(cut(hour,4))))
+
+
+# make the data set smaller so we can deal with it
+df <- df %>% filter(month(local_time) %in% c(6,7,8,9,10)) %>% 
+  select(fishing,speed,bottom_depth,len,hour,bearing.rad) %>%
+  mutate(y=fishing) %>% select(-fishing)
+
+str(df)
+```
+
+## Splitting Data
+
+The caret library has a *createDataPartition()* method that can split your data into training and testing partitions.  By default, the sampling scheme used by *createDataPartition()* will attempt to balance the class distribution of the target variable among splits.  [From the documentation](https://topepo.github.io/caret/data-splitting.html)
+
+> The function createDataPartition can be used to create balanced splits of the data. If the y argument to this function is a factor, the random sampling occurs within each class and should preserve the overall class distribution of the data. 
+
+```{r}
+#--------------------------------------------------------------------
+#create the training and testing data
+index <- createDataPartition(df$y,p=0.8,list=F,times=1)
+df.train <- df[index,] %>% mutate(y=as.factor(y))
+levels(df.train$y) <- c('notfishing','fishing') 
+df.test <- df[-index,] %>% mutate(y=as.factor(y))
+levels(df.test$y) <- c('notfishing','fishing')  
+#--------------------------------------------------------------------
+
+str(df.train)
+str(df.test)
+```
+
+Let's have a quick look at the target variables in the training and testing sets:
+
+```{r}
+df.train %>% group_by(y) %>% summarise(count=n())
+df.test %>% group_by(y) %>% summarise(count=n())
+
+```
+
+"Fishing" observations are about 27% of the training and testing data...so that's cool.
+
+The caret library is pretty flexible and has some cool options for other sampling schemes if balancing class distributions isn't your thing:
+
+* a function *maxDissim()* can create data splits based on maximum dissimilarity
+* a function *createTimeSlices()* can create indexes for splitting time-series data
+
+Finally, if you prefer to roll your own K-fold Cross-Validation, there is a function *createFolds()* that will generate index values to use in assigning observations to folds:
+
+```{r}
+# create a column assigning each observation to one of 5 folds for CV:
+df$fold <- createFolds(df.est$y,k=5,list=F)
+head(df)
+df <- df %>% select(-fold)
+```
+
+
+## Preprocessing
+
+I'm going to do a pretty mundane and popular data transformation here: I'm going to normalize my continuous variables (speed, bottom_depth, and bearing) so that lie on the [0,1] interval.  This is a common processing step done in machine learning to avoid scale bias.  Noteably however, I want to leave my categorical variables alone.  
+
+Caret has a *preProcess()* function for this.  It works like this:
+
+```{r}
+# pre process the data....only the continuous variables
+preProcValues <- preProcess(df.train, method = c("range"))
+trainTransformed <- predict(preProcValues, df.train)
+testTransformed <- predict(preProcValues, df.test)
+
+preProcValues
+```
+
+The output here tells us that 3 categorical variables were ignored and 3 continuous variables were normalized.  
+
+```{r}
+head(trainTransformed)
+```
+
+## Setting hyper-parameter grids
+
+
+## Training
+
+
+

@@ -194,8 +194,83 @@ head(trainTransformed)
 
 ## Setting hyper-parameter grids
 
+In our *Splitting the Data* section we reviewed how training data could be split into folds for Cross-Validation using *createFolds()*.  In practice, caret has a method called *train()* that can be used to perform different flavors of cross-validation.
+
+### training method
+
+Several training methods are supported including: 
+
+* cv - K-fold cross validation
+* repeatedcv - repeated K-fold cross validation
+* LOOCV - leave one out cross validation
+* oob - out-of-bag estimates for use with random forest models
+
+[Section 5.5.4](http://topepo.github.io/caret/model-training-and-tuning.html#custom) details the different options that can be declared for ```train(method=...)```.
+
+### summary function
+
+[Here's a primer on ROC curves for evaluating ML Models](https://medium.com/greyatom/lets-learn-about-auc-roc-curve-4a94b4d88152).
+
+The actual summary function that one uses to evaluate the 'best' model will be declared within the *train()* method that gets called later.  But *train()* only has access to model summaries output by the ML algorithm being called.
+
+Caret provides a function to calculate alternative performance metrics:
+
+*summaryFunction=* 
+
+which can be used to add more user control over the performance metrics.  
+
+In the code below I specify ```summaryFunction=twoClassSummary ```.  This is because I am using the [gbm library](https://cran.r-project.org/web/packages/gbm/gbm.pdf) to train the gradient boosted tree.  The *gbm()* function does not compute an ROC metric by default.  So if we want to use ROC to evaluate the gbm models, we need to add that functionality using caret's *summaryFunction* option.
+
+```{r}
+# set up control parameters for the neural network
+fitControl <- trainControl(method = "cv", 
+                           number = 5, 
+                           classProbs = TRUE, 
+                           summaryFunction = twoClassSummary)
+
+nnetGrid <-  expand.grid(size = seq(from = 1, to = 15, by = 1),
+                         decay = seq(from = 0.1, to = 0.5, by = 0.1))
+
+# set up control parameters for the GBM
+fitControl.GBM <- trainControl(method = "cv", 
+                               number = 5,
+                               classProbs = TRUE,
+                               summaryFunction = twoClassSummary)
+
+```
 
 ## Training
 
+The real red meat of the caret library is the *train()* function.  *train()* works with [238 models](http://topepo.github.io/caret/available-models.html) from a variety of different R libraries.  In the chunk below we use the preprocessed training data to train a neural network model using the [nnet](https://cran.r-project.org/web/packages/nnet/nnet.pdf) library.
 
+The model is trained using 5 fold Cross-Validation which was declared in the *fitControl* object created by caret's *trainControl()* function.  The hyper-parameters used for training are defined in the *tuneGrid()* argument.
+
+```{r}
+#----------------------------------------------------------------------
+# Train the models
+t <- Sys.time()
+nnetFit <- train(y ~ ., 
+                 data = trainTransformed,
+                 method = "nnet",
+                 metric = "ROC",
+                 trControl = fitControl,
+                 tuneGrid = nnetGrid,
+                 verbose = FALSE)
+Sys.time() - t
+```
+
+```{r}
+# tree-based methods generally don't need input scaling
+gbmFit <- train(y ~ ., 
+                #data = trainTransformed,
+                data = df.train,
+                method = "gbm",
+                metric = "ROC",
+                trControl = fitControl.GBM,
+                na.action = na.omit,
+                verbose = FALSE)
+Sys.time() - t
+#-------------------------------------------------------------------------
+
+```
 

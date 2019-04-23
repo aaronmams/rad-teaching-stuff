@@ -58,8 +58,9 @@ nnetGrid <-  expand.grid(size = seq(from = 1, to = 15, by = 1),
 # set up control parameters for the GBM
 fitControl.GBM <- trainControl(method = "cv", 
                                number = 5,
-                               classProbs = TRUE,
-                               summaryFunction = twoClassSummary)
+                               classProbs = TRUE #,
+                               #summaryFunction = twoClassSummary
+                               )
 
 # pre process the data....only the continuous variables
 preProcValues <- preProcess(df.train, method = c("range"))

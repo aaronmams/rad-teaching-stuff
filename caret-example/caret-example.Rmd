@@ -119,12 +119,13 @@ df <- df %>% ungroup() %>% mutate(len=as.factor(as.numeric(cut(len,5))),
 
 
 # make the data set smaller so we can deal with it
-df <- df %>% filter(month(local_time) %in% c(6,7,8,9,10)) %>% 
+df <- df %>% filter(year(local_time) == 2014 & month(local_time) %in% c(7,8,9)) %>% 
   select(fishing,speed,bottom_depth,len,hour,bearing.rad) %>%
   mutate(y=fishing) %>% select(-fishing)
 
 str(df)
 ```
+
 
 ## Splitting Data
 
@@ -165,7 +166,7 @@ Finally, if you prefer to roll your own K-fold Cross-Validation, there is a func
 
 ```{r}
 # create a column assigning each observation to one of 5 folds for CV:
-df$fold <- createFolds(df.est$y,k=5,list=F)
+df$fold <- createFolds(df$y,k=5,list=F)
 head(df)
 df <- df %>% select(-fold)
 ```
@@ -228,8 +229,9 @@ fitControl <- trainControl(method = "cv",
                            classProbs = TRUE, 
                            summaryFunction = twoClassSummary)
 
-nnetGrid <-  expand.grid(size = seq(from = 1, to = 15, by = 1),
-                         decay = seq(from = 0.1, to = 0.5, by = 0.1))
+# make the hyper-parameter grid pretty small so it doesn't run forever
+nnetGrid <-  expand.grid(size = seq(from = 5, to = 10, by = 1),
+                         decay = seq(from = 0.1, to = 0.2, by = 0.1))
 
 # set up control parameters for the GBM
 fitControl.GBM <- trainControl(method = "cv", 
@@ -241,11 +243,15 @@ fitControl.GBM <- trainControl(method = "cv",
 
 ## Training
 
-The real red meat of the caret library is the *train()* function.  *train()* works with [238 models](http://topepo.github.io/caret/available-models.html) from a variety of different R libraries.  In the chunk below we use the preprocessed training data to train a neural network model using the [nnet](https://cran.r-project.org/web/packages/nnet/nnet.pdf) library.
+The real red meat of the caret library is the *train()* function.  *train()* works with [238 models](http://topepo.github.io/caret/available-models.html) from a variety of different R libraries.  
+
+### The ANN
+
+In the chunk below we use the preprocessed training data to train a neural network model using the [nnet](https://cran.r-project.org/web/packages/nnet/nnet.pdf) library.
 
 The model is trained using 5 fold Cross-Validation which was declared in the *fitControl* object created by caret's *trainControl()* function.  The hyper-parameters used for training are defined in the *tuneGrid()* argument.
 
-```{r}
+```{r echo=F}
 #----------------------------------------------------------------------
 # Train the models
 t <- Sys.time()
@@ -255,9 +261,36 @@ nnetFit <- train(y ~ .,
                  metric = "ROC",
                  trControl = fitControl,
                  tuneGrid = nnetGrid,
+                 na.action=na.omit,
+                 trace=F,
                  verbose = FALSE)
-Sys.time() - t
+run.time <- Sys.time() - t
 ```
+
+
+Just to further illuminate the crucial relationship here, I'm going to use the *nnet()* function from the [nnet](https://cran.r-project.org/web/packages/nnet/nnet.pdf) package directly and compare.
+
+```{r}
+nn2 <- nnet(y~.,data=trainTransformed,size=5,linout=F,na.action=na.omit,trace=F)
+nn2
+```
+
+For illustrative purposes, just look at the object types:
+
+```{r}
+class(nnetFit)
+class(nn2)
+```
+
+```{r}
+nnetFit$finalModel
+
+```
+```{r}
+nn2
+```
+
+### GBM
 
 ```{r}
 # tree-based methods generally don't need input scaling

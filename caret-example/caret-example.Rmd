@@ -230,7 +230,7 @@ fitControl <- trainControl(method = "cv",
                            summaryFunction = twoClassSummary)
 
 # make the hyper-parameter grid pretty small so it doesn't run forever
-nnetGrid <-  expand.grid(size = seq(from = 5, to = 10, by = 1),
+nnetGrid <-  expand.grid(size = seq(from = 5, to = 8, by = 1),
                          decay = seq(from = 0.1, to = 0.2, by = 0.1))
 
 # set up control parameters for the GBM
@@ -251,7 +251,7 @@ In the chunk below we use the preprocessed training data to train a neural netwo
 
 The model is trained using 5 fold Cross-Validation which was declared in the *fitControl* object created by caret's *trainControl()* function.  The hyper-parameters used for training are defined in the *tuneGrid()* argument.
 
-```{r echo=F}
+```{r}
 #----------------------------------------------------------------------
 # Train the models
 t <- Sys.time()
@@ -264,7 +264,8 @@ nnetFit <- train(y ~ .,
                  na.action=na.omit,
                  trace=F,
                  verbose = FALSE)
-run.time <- Sys.time() - t
+Sys.time() - t
+nnetFit$finalModel
 ```
 
 
@@ -282,13 +283,207 @@ class(nnetFit)
 class(nn2)
 ```
 
-```{r}
-nnetFit$finalModel
 
-```
 ```{r}
 nn2
 ```
+
+To restate the obvious:
+
+* nnetFit is a list object returned by the *train()* function which performed a grid search over multiple values of 2 hyper-parameters (size and decay) to find the "best" single hidden layer neural network model based on 5 Fold Cross-Validation using ROC as the selection criteria.
+
+* nn2 is list object containing the results of a single call to the *nnet()* function
+
+The relationship between caret::train() and nnet::nnet() can be illustrated with the following code:
+
+```{r}
+library(AUC)
+
+# first I'm going to make a copy of the training data just so this doesn't get
+# too confusing
+dat <- trainTransformed
+dat$fold <- createFolds(dat$y,k=5,list=F)
+
+
+# replicate the hyper-parameter grid from above
+size <- seq(from = 5, to = 8, by = 1)
+decay <-  seq(from = 0.1, to = 0.2, by = 0.1)
+
+# loop through the hyper-parameters + CV folds 
+roc.mod <- list()
+counter <- 0
+  for(i in size){ 
+    for(j in decay){
+      counter <- counter + 1
+      roc.fold <- list()
+      for(k in unique(dat$fold)){
+        
+      train <- dat[dat$fold != k,]
+      test <- dat[dat$fold == k,]
+      res <- nnet(y~speed+bottom_depth+len+hour+bearing.rad,
+                  data=train,size=i,lineout=F,na.action=na.omit,trace=F)
+      test$pred <- predict(res,test,type="class")
+      
+      roc.fold[[k]]<- AUC::auc(roc(test$pred,test$y))
+      #plot(roc(test$pred,test$y))
+      
+      }
+    roc.mod[[counter]] <- c(size=i,decay=j,ROC=mean(unlist(roc.fold)))  
+  }   
+  }
+roc.mod <- matrix(unlist(roc.mod),nc=3,byrow=T)
+colnames(roc.mod) <- c('size','decay','ROC')
+roc.mod
+```
+
+### nnet and train()
+
+For the simplified example above I actual get a different 'best' model doing 5 Fold CV by hand than if I use the train() function.  This could just be a feature of sampling schemes used to create the folds.  Let's try a comparison using the same folds.
+
+First, look at really simple *train()* object:
+
+```{r}
+# set up control parameters for the neural network
+fitControl <- trainControl(method = "cv", 
+                           number = 5, 
+                           classProbs = TRUE, 
+                           summaryFunction = twoClassSummary)
+
+# make the hyper-parameter grid pretty small so it doesn't run forever
+nnetGrid <-  expand.grid(size = seq(from = 5, to = 5, by = 1),
+                         decay = seq(from = 0.1, to = 0.1, by = 0.1))
+
+NNcaret <- train(y ~ ., 
+                 data = trainTransformed,
+                 method = "nnet",
+                 metric = "ROC",
+                 trControl = fitControl,
+                 tuneGrid = nnetGrid,
+                 na.action=na.omit,
+                 trace=F,
+                 verbose = FALSE)
+NNcaret
+```
+
+
+```{r}
+index <- NNcaret$control$index
+str(index)
+
+NNcaret$resample
+```
+
+Now we want to make sure we do a 5 Fold CV using the same folds but training the model using *nnet()* instead of caret::train().
+
+```{r}
+rocs <- list()
+for(i in 1:5){
+# for each fold make sure the training data we feed to nnet is the same as that used in train()
+NNnet <- nnet(y~speed+bottom_depth+len+hour+bearing.rad,
+                  data=trainTransformed[index[[i]],],size=5,decay=0.1,
+                    lineout=F,na.action=na.omit,trace=F)
+NNnet$pred <- predict(NNnet,trainTransformed[-index[[i]],],type="class")
+rocs[[i]]<- AUC::auc(roc(NNnet$pred,trainTransformed[-index[[i]],]$y))
+}
+unlist(rocs)
+```
+
+Pretty clear that the ROC we calculated using:
+
+* nnet() --> predict() --> AUC::
+
+#### nnet() and train() without NAs
+
+Here, I just want to see if the NAs in the data are causing funky thing....maybe I just don't really understand how the prediction phase is treating NAs.
+
+Let's repeat the expiriment we did above but sanitize the data first.
+
+```{r}
+newtraining <- df.train[complete.cases(df.train),] 
+newtesting <- df.test[complete.cases(df.test),]
+
+# pre process the data....only the continuous variables
+preProcValues <- preProcess(newtraining, method = c("range"))
+trainTransformed <- predict(preProcValues, newtraining)
+testTransformed <- predict(preProcValues, newtesting)
+
+preProcValues
+
+#confirm there are no NAs in the new data
+sum(is.na(newtraining))
+sum(is.na(newtesting))
+```
+
+
+```{r}
+# set up control parameters for the neural network
+fitControl <- trainControl(method = "cv", 
+                           number = 5, 
+                           classProbs = TRUE, 
+                           summaryFunction = twoClassSummary)
+
+# make the hyper-parameter grid pretty small so it doesn't run forever
+nnetGrid <-  expand.grid(size = seq(from = 5, to = 5, by = 1),
+                         decay = seq(from = 0.1, to = 0.1, by = 0.1))
+
+NNcaret <- train(y ~ ., 
+                 data = trainTransformed,
+                 method = "nnet",
+                 metric = "ROC",
+                 trControl = fitControl,
+                 tuneGrid = nnetGrid,
+                 na.action=na.omit,
+                 trace=F,
+                 verbose = FALSE)
+
+index <- NNcaret$control$index
+str(index)
+
+NNcaret$resample
+
+# Now use the familiar nnet() --> predict() --> ROC
+
+rocs <- list()
+for(i in 1:5){
+# for each fold make sure the training data we feed to nnet is the same as that used in train()
+NNnet <- nnet(y~speed+bottom_depth+len+hour+bearing.rad,
+                  data=trainTransformed[index[[i]],],size=5,decay=0.1,
+                    lineout=F,na.action=na.omit,trace=F)
+NNnet$pred <- predict(NNnet,trainTransformed[-index[[i]],],type="class")
+rocs[[i]]<- AUC::auc(roc(NNnet$pred,trainTransformed[-index[[i]],]$y))
+}
+unlist(rocs)
+```
+
+
+I know I've almost beaten this to death but before it rolls over completely let's see if repeated Cross-Validation with resampling gives us more consistent results between the two approaches.
+
+```{r}
+t <- Sys.time()
+# set up control parameters for the neural network
+fitControl <- trainControl(method = "repeatedcv", 
+                           number = 5, 
+                           repeats = 10,
+                           classProbs = TRUE, 
+                           summaryFunction = twoClassSummary)
+
+# make the hyper-parameter grid pretty small so it doesn't run forever
+nnetGrid <-  expand.grid(size = seq(from = 5, to = 5, by = 1),
+                         decay = seq(from = 0.1, to = 0.1, by = 0.1))
+
+NNcaret <- train(y ~ ., 
+                 data = trainTransformed,
+                 method = "nnet",
+                 metric = "ROC",
+                 trControl = fitControl,
+                 tuneGrid = nnetGrid,
+                 na.action=na.omit,
+                 trace=F,
+                 verbose = FALSE)
+Sys.time() - t
+NNcaret
+```
+
 
 ### GBM
 

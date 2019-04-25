@@ -1,0 +1,388 @@
+---
+title: "A closer look at nnet() and caret::train()"
+output: html_notebook
+---
+
+
+```{r warnings=F}
+rm(list=ls())
+library(dplyr)
+library(data.table)
+library(ggplot2)
+library(caret)
+library(nnet)
+library(lubridate)
+library(gbm)
+library(NeuralNetTools)
+```
+
+Start with the same date that we used on the [caret-example.RMD](https://github.com/aaronmams/rad-teaching-stuff/blob/master/caret-example/caret-example.Rmd) notebook.
+
+```{r}
+df <- tbl_df(read.csv('fishing_data.csv')) %>%
+       mutate(utc_date=as.POSIXct(utc_date,format="%Y-%m-%d %H:%M:%S",tz='UTC'),
+              local_time=as.POSIXct(local_time,format="%Y-%m-%d %H:%M:%S"))
+df <- df %>% mutate(y=factor(ifelse(fishing==0,'notfishing','fishing')))
+df <- df %>% ungroup() %>% mutate(len=as.factor(as.numeric(cut(len,5))),
+                                    hour=as.factor(as.numeric(cut(hour,4))))
+
+# make the data set smaller so we can deal with it
+df <- df %>% filter(year(local_time) == 2014 & month(local_time) %in% c(7,8,9)) %>% 
+  select(y,fishing,speed,bottom_depth,len,hour,bearing.rad) %>%
+  select(-fishing)
+
+#make a smaller partition
+index <- createDataPartition(df$y,p=0.5,list=F,times=1)
+df.train <- df[index,]
+df.test <- df[-index,]  
+
+# pre process the data....only the continuous variables
+preProcValues <- preProcess(df.train, method = c("range"))
+trainTransformed <- predict(preProcValues, df.train)
+testTransformed <- predict(preProcValues, df.test)
+```
+
+
+## Apple-to-Apples
+
+Here is as close as I could come to an apples-to-apples comparison of a 5 Fold CV experiment executed two approaches illustrated using pseudo-code:
+
+* Method 1
+    + caret::train(method='nnet'...)
+    
+* Method 2
+    + set testing fold
+    + train using nnet() on all folds except testing fold
+    + predict outcomes in testing fold
+    + calculate ROC
+
+Here is the step-by-step of what I did:
+
+1. define a single set of hyper-parameters (size = 5, decay = 0.1, maxit = 1000)
+2. run a 5 Fold CV using caret::train()
+3. get the row indexes for the CV folds used by caret::train()
+4. get the ROC values computed for each fold
+5. partition the data by hand into the same folds used by caret::train()
+6. train the model using nnet() for each fold
+7. for each fold, predict the target variable using predict() on the nnet object
+8. use the convenience function caret::twoClassSummary() to compute ROC for each fold
+
+Here is how I coded it.  Note, I'm coding this as a function because I'm going to run it a few times and illustrate how, sometimes I get the same ROC from the two approaches...and sometimes I don't.  I guess we can discuss as a group how worrisome that fact should be.
+
+
+```{r}
+#######################################################################
+#######################################################################
+# compare ROC for train() versus nnet()
+
+#----------------------------------------------------------------
+# first look at ROC for the 5 Fold CV from train()
+
+comp.fn <- function(data){
+df <- data  
+
+idx <- createDataPartition(df$y,p=0.005,list=F,times=1)
+df <- df[idx,]
+
+# set up control parameters for the neural network
+fitControl <- trainControl(method = "cv", 
+                           number = 5, 
+                           classProbs = TRUE, 
+                           summaryFunction = twoClassSummary)
+
+# make the hyper-parameter grid pretty small so it doesn't run forever
+nnetGrid <-  expand.grid(size = seq(from = 5, to = 5, by = 1),
+                         decay = seq(from = 0.1, to = 0.1, by = 0.1))
+
+nnetFit <- train(y ~ speed + bottom_depth + len + hour + bearing.rad, 
+                 data = df,
+                 method = "nnet",
+                 maxit= 1000,
+                 metric = "ROC",
+                 trControl = fitControl,
+                 tuneGrid = nnetGrid,
+                 na.action=na.omit,
+                 trace=F,
+                 verbose = FALSE)
+
+nnetFit$resample
+#----------------------------------------------------------------------
+
+#----------------------------------------------------------------------
+# make the data frame look a certain way because twoClassSummary() is 
+# kind of fickle
+df.comp <- df %>% mutate(obs=factor(ifelse(y=='fishing','class1','class2'))) %>% select(-y)
+head(df.comp)
+
+# start with the same CV folds that are in train
+index <- nnetFit$control$index
+
+roc <- list()
+for(i in 1:5){
+
+train <- df.comp[index[[i]],]
+test <- df.comp[-index[[i]],]
+res <- nnet(obs~speed+bottom_depth+len+hour+bearing.rad,
+            data=train,size=5,decay=0.1,maxit=1000,lineout=F,na.action=na.omit,trace=F)
+
+test$pred <- predict(res,test,type="class")
+test$classprob <- predict(res,test,type="raw")
+
+
+dat.sum <- data.frame(pred=test$pred,
+                      obs=test$obs,
+                      class1=1-test$classprob,
+                      class2=test$classprob)
+
+#dat.sum <- dat.sum[complete.cases(dat.sum),]
+classes = c('class1','class2')
+
+roc[[i]] <- twoClassSummary(dat.sum, lev = classes)[1]
+}
+
+
+#format output a little
+roc.net <- data.frame(fold=c('Fold1','Fold2','Fold3','Fold4','Fold5'),ROC=unlist(roc),method="nnet")
+roc.caret <- data.frame(fold=nnetFit$resample$Resample,ROC=nnetFit$resample$ROC,method='caret')
+result <- tbl_df(data.frame(rbind(roc.caret,roc.net))) %>% arrange(fold)
+return(result)
+}
+```
+
+
+```{r}
+comp.fn(data=trainTransformed[complete.cases(trainTransformed),])
+```
+
+```{r}
+comp.fn(data=trainTransformed[complete.cases(trainTransformed),])
+```
+
+```{r}
+comp.fn(data=trainTransformed[complete.cases(trainTransformed),])
+```
+
+
+I don't know exactly where I'm going with this...other than to say, I was a little bummed that I went to all the trouble of doing this a few different ways in order to really understand the process only to find out that I sometimes get different answers.  I guess this isn't a huge deal as long as the model selection is reasonably consistent.  Which brings me to my next section:
+
+
+## Is Model Selection Consistent?
+
+Here, I'm going to do 5 Fold CV to choose the best ANN conditional on the following hyper parameter grid:
+
+```{r}
+nnetGrid <-  expand.grid(size = seq(from = 5, to = 10, by = 1),
+                         decay = seq(from = 0.1, to = 0.5, by = 0.1))
+
+```
+
+
+I'm going to do the 5 Fold CV 3 ways:
+
+1.  caret::train()
+2.  nnet() by hand using the caret::twoClassSummary() function to compute ROC
+3.  nnet() by hand using AUC::auc(roc()) to compute ROC
+
+Approaches #2 and #3 will rank models based on ROC average across the 5 folds.  I assume that caret::train() also uses some kind of score averaging across CV folds to compute a model performance metric. 
+
+
+
+
+
+
+
+
+
+The relationship between caret::train() and nnet::nnet() can be illustrated with the following code:
+
+```{r}
+library(AUC)
+
+# first I'm going to make a copy of the training data just so this doesn't get
+# too confusing
+dat <- trainTransformed
+dat$fold <- createFolds(dat$y,k=5,list=F)
+
+
+# replicate the hyper-parameter grid from above
+size <- seq(from = 5, to = 8, by = 1)
+decay <-  seq(from = 0.1, to = 0.2, by = 0.1)
+
+# loop through the hyper-parameters + CV folds 
+roc.mod <- list()
+counter <- 0
+  for(i in size){ 
+    for(j in decay){
+      counter <- counter + 1
+      roc.fold <- list()
+      for(k in unique(dat$fold)){
+        
+      train <- dat[dat$fold != k,]
+      test <- dat[dat$fold == k,]
+      res <- nnet(y~speed+bottom_depth+len+hour+bearing.rad,
+                  data=train,size=i,lineout=F,na.action=na.omit,trace=F)
+      test$pred <- predict(res,test,type="class")
+      
+      roc.fold[[k]]<- AUC::auc(roc(test$pred,test$y))
+      #plot(roc(test$pred,test$y))
+      
+      }
+    roc.mod[[counter]] <- c(size=i,decay=j,ROC=mean(unlist(roc.fold)))  
+  }   
+  }
+roc.mod <- matrix(unlist(roc.mod),nc=3,byrow=T)
+colnames(roc.mod) <- c('size','decay','ROC')
+roc.mod
+```
+
+### nnet and train()
+
+For the simplified example above I actual get a different 'best' model doing 5 Fold CV by hand than if I use the train() function.  This could just be a feature of sampling schemes used to create the folds.  Let's try a comparison using the same folds.
+
+First, look at really simple *train()* object:
+
+```{r}
+# set up control parameters for the neural network
+fitControl <- trainControl(method = "cv", 
+                           number = 5, 
+                           classProbs = TRUE, 
+                           summaryFunction = twoClassSummary)
+
+# make the hyper-parameter grid pretty small so it doesn't run forever
+nnetGrid <-  expand.grid(size = seq(from = 5, to = 5, by = 1),
+                         decay = seq(from = 0.1, to = 0.1, by = 0.1))
+
+NNcaret <- train(y ~ ., 
+                 data = trainTransformed,
+                 method = "nnet",
+                 metric = "ROC",
+                 trControl = fitControl,
+                 tuneGrid = nnetGrid,
+                 na.action=na.omit,
+                 trace=F,
+                 verbose = FALSE)
+NNcaret
+```
+
+
+```{r}
+index <- NNcaret$control$index
+str(index)
+
+NNcaret$resample
+```
+
+Now we want to make sure we do a 5 Fold CV using the same folds but training the model using *nnet()* instead of caret::train().
+
+```{r}
+rocs <- list()
+for(i in 1:5){
+# for each fold make sure the training data we feed to nnet is the same as that used in train()
+NNnet <- nnet(y~speed+bottom_depth+len+hour+bearing.rad,
+                  data=trainTransformed[index[[i]],],size=5,decay=0.1,
+                    lineout=F,na.action=na.omit,trace=F)
+NNnet$pred <- predict(NNnet,trainTransformed[-index[[i]],],type="class")
+rocs[[i]]<- AUC::auc(roc(NNnet$pred,trainTransformed[-index[[i]],]$y))
+}
+unlist(rocs)
+```
+
+Pretty clear that the ROC we calculated using:
+
+* nnet() --> predict() --> AUC::
+
+#### nnet() and train() without NAs
+
+Here, I just want to see if the NAs in the data are causing funky thing....maybe I just don't really understand how the prediction phase is treating NAs.
+
+Let's repeat the expiriment we did above but sanitize the data first.
+
+```{r}
+newtraining <- df.train[complete.cases(df.train),] 
+newtesting <- df.test[complete.cases(df.test),]
+
+# pre process the data....only the continuous variables
+preProcValues <- preProcess(newtraining, method = c("range"))
+trainTransformed <- predict(preProcValues, newtraining)
+testTransformed <- predict(preProcValues, newtesting)
+
+preProcValues
+
+#confirm there are no NAs in the new data
+sum(is.na(newtraining))
+sum(is.na(newtesting))
+```
+
+
+```{r}
+# set up control parameters for the neural network
+fitControl <- trainControl(method = "cv", 
+                           number = 5, 
+                           classProbs = TRUE, 
+                           summaryFunction = twoClassSummary)
+
+# make the hyper-parameter grid pretty small so it doesn't run forever
+nnetGrid <-  expand.grid(size = seq(from = 5, to = 5, by = 1),
+                         decay = seq(from = 0.1, to = 0.1, by = 0.1))
+
+NNcaret <- train(y ~ ., 
+                 data = newtraining,
+                 method = "nnet",
+                 metric = "ROC",
+                 trControl = fitControl,
+                 tuneGrid = nnetGrid,
+                 na.action=na.omit,
+                 trace=F,
+                 verbose = FALSE)
+
+index <- NNcaret$control$index
+str(index)
+
+NNcaret$resample
+```
+
+```{r}
+# Now use the familiar nnet() --> predict() --> ROC
+
+rocs <- list()
+for(i in 1:5){
+# for each fold make sure the training data we feed to nnet is the same as that used in train()
+NNnet <- nnet(y~speed+bottom_depth+len+hour+bearing.rad,
+                  data=trainTransformed[index[[i]],],size=5,decay=0.1,
+                    lineout=F,na.action=na.omit,trace=F)
+NNnet$pred <- predict(NNnet,trainTransformed[-index[[i]],],type="class")
+rocs[[i]]<- AUC::auc(roc(NNnet$pred,trainTransformed[-index[[i]],]$y))
+}
+unlist(rocs)
+```
+
+
+I know I've almost beaten this to death but before it rolls over completely let's see if repeated Cross-Validation with resampling gives us more consistent results between the two approaches.
+
+```{r}
+t <- Sys.time()
+# set up control parameters for the neural network
+fitControl <- trainControl(method = "repeatedcv", 
+                           number = 5, 
+                           repeats = 10,
+                           classProbs = TRUE, 
+                           summaryFunction = twoClassSummary)
+
+# make the hyper-parameter grid pretty small so it doesn't run forever
+nnetGrid <-  expand.grid(size = seq(from = 5, to = 5, by = 1),
+                         decay = seq(from = 0.1, to = 0.1, by = 0.1))
+
+NNcaret <- train(y ~ ., 
+                 data = trainTransformed,
+                 method = "nnet",
+                 metric = "ROC",
+                 trControl = fitControl,
+                 tuneGrid = nnetGrid,
+                 na.action=na.omit,
+                 trace=F,
+                 verbose = FALSE)
+Sys.time() - t
+NNcaret
+```
+
+

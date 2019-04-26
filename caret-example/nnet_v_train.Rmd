@@ -3,6 +3,9 @@ title: "A closer look at nnet() and caret::train()"
 output: html_notebook
 ---
 
+The purpose of this workbook is to enhance understanding of the caret library by looking at two ways to estimate a neural network that should be roughly equivilent.  The first approach uses caret to train a neural network using [nnet::nnet()](https://cran.r-project.org/web/packages/nnet/nnet.pdf).  The second uses the *nnet()* function directly.   
+
+# Dependencies
 
 ```{r warnings=F}
 rm(list=ls())
@@ -16,7 +19,14 @@ library(gbm)
 library(NeuralNetTools)
 ```
 
+# Data Set Up
+
 Start with the same date that we used on the [caret-example.RMD](https://github.com/aaronmams/rad-teaching-stuff/blob/master/caret-example/caret-example.Rmd) notebook.
+
+Note that I'm doing a couple things here:
+
+1. partitioning the data into training and test...not super important for this experiment but it cuts down on run time
+2. preprocess the data by normalizing all continuous input variables
 
 ```{r}
 df <- tbl_df(read.csv('fishing_data.csv')) %>%
@@ -43,18 +53,23 @@ testTransformed <- predict(preProcValues, df.test)
 ```
 
 
-## Apple-to-Apples
+# An Apples-to-Apples Comparison
 
-Here is as close as I could come to an apples-to-apples comparison of a 5 Fold CV experiment executed two approaches illustrated using pseudo-code:
+Here is as close as I could come to an apples-to-apples comparison of a 5 Fold CV experiment executed using two approaches illustrated using pseudo-code:
 
+* Set up
+    + use createDataPartition() to create a managable data set that perserves target variable distribution
+    
 * Method 1
+    + caret::fitControl() to define cross validation process
+    + caret::expandGrid() to set hyper parameters
     + caret::train(method='nnet'...)
     
 * Method 2
-    + set testing fold
+    + get CV folds used in Method 1
     + train using nnet() on all folds except testing fold
     + predict outcomes in testing fold
-    + calculate ROC
+    + calculate ROC using caret::twoClassSummary()
 
 Here is the step-by-step of what I did:
 
@@ -76,7 +91,6 @@ Here is how I coded it.  Note, I'm coding this as a function because I'm going t
 # compare ROC for train() versus nnet()
 
 #----------------------------------------------------------------
-# first look at ROC for the 5 Fold CV from train()
 
 comp.fn <- function(data){
 df <- data  
@@ -166,7 +180,7 @@ comp.fn(data=trainTransformed[complete.cases(trainTransformed),])
 I don't know exactly where I'm going with this...other than to say, I was a little bummed that I went to all the trouble of doing this a few different ways in order to really understand the process only to find out that I sometimes get different answers.  I guess this isn't a huge deal as long as the model selection is reasonably consistent.  Which brings me to my next section:
 
 
-## Is Model Selection Consistent?
+# Is Model Selection Consistent?
 
 Here, I'm going to do 5 Fold CV to choose the best ANN conditional on the following hyper parameter grid:
 
@@ -196,7 +210,7 @@ df.comp %>% group_by(y) %>% summarise(count=n())
 ```
 
 
-### Method 1
+## Method 1
 
 This is the pretty straight forward method utilizing caret.
 
@@ -224,15 +238,15 @@ Sys.time() - t
 ```
 
 
-### Model 2 and 3
+## Method 2 and 3
 
 Model 2 is the method where we invoke the following pipeline:
 
-caret::createFolds() --> set hyper-params --> nnet() --> caret::twoClassSummary()
+>caret::createFolds() --> set hyper-params --> nnet() --> caret::twoClassSummary()
 
 Model 3 is the 'mostly' caret independent process:
 
-caret::createFolds() --> set hyper-params --> nnet() --> AUC::auc(roc())
+>caret::createFolds() --> set hyper-params --> nnet() --> AUC::auc(roc())
  
 Note that Model 3 is nested within the code for model 2 as the only thing that is really different between them is that Model 2 uses caret::twoClassSummary() to compute ROC and Model 3 uses AUC::auc(roc()) to compute ROC. 
 
@@ -304,199 +318,5 @@ mod1
 ```
 
 
-
-
-
-The relationship between caret::train() and nnet::nnet() can be illustrated with the following code:
-
-```{r}
-library(AUC)
-
-# first I'm going to make a copy of the training data just so this doesn't get
-# too confusing
-dat <- trainTransformed
-dat$fold <- createFolds(dat$y,k=5,list=F)
-
-
-# replicate the hyper-parameter grid from above
-size <- seq(from = 5, to = 8, by = 1)
-decay <-  seq(from = 0.1, to = 0.2, by = 0.1)
-
-# loop through the hyper-parameters + CV folds 
-roc.mod <- list()
-counter <- 0
-  for(i in size){ 
-    for(j in decay){
-      counter <- counter + 1
-      roc.fold <- list()
-      for(k in unique(dat$fold)){
-        
-      train <- dat[dat$fold != k,]
-      test <- dat[dat$fold == k,]
-      res <- nnet(y~speed+bottom_depth+len+hour+bearing.rad,
-                  data=train,size=i,lineout=F,na.action=na.omit,trace=F)
-      test$pred <- predict(res,test,type="class")
-      
-      roc.fold[[k]]<- AUC::auc(roc(test$pred,test$y))
-      #plot(roc(test$pred,test$y))
-      
-      }
-    roc.mod[[counter]] <- c(size=i,decay=j,ROC=mean(unlist(roc.fold)))  
-  }   
-  }
-roc.mod <- matrix(unlist(roc.mod),nc=3,byrow=T)
-colnames(roc.mod) <- c('size','decay','ROC')
-roc.mod
-```
-
-### nnet and train()
-
-For the simplified example above I actual get a different 'best' model doing 5 Fold CV by hand than if I use the train() function.  This could just be a feature of sampling schemes used to create the folds.  Let's try a comparison using the same folds.
-
-First, look at really simple *train()* object:
-
-```{r}
-# set up control parameters for the neural network
-fitControl <- trainControl(method = "cv", 
-                           number = 5, 
-                           classProbs = TRUE, 
-                           summaryFunction = twoClassSummary)
-
-# make the hyper-parameter grid pretty small so it doesn't run forever
-nnetGrid <-  expand.grid(size = seq(from = 5, to = 5, by = 1),
-                         decay = seq(from = 0.1, to = 0.1, by = 0.1))
-
-NNcaret <- train(y ~ ., 
-                 data = trainTransformed,
-                 method = "nnet",
-                 metric = "ROC",
-                 trControl = fitControl,
-                 tuneGrid = nnetGrid,
-                 na.action=na.omit,
-                 trace=F,
-                 verbose = FALSE)
-NNcaret
-```
-
-
-```{r}
-index <- NNcaret$control$index
-str(index)
-
-NNcaret$resample
-```
-
-Now we want to make sure we do a 5 Fold CV using the same folds but training the model using *nnet()* instead of caret::train().
-
-```{r}
-rocs <- list()
-for(i in 1:5){
-# for each fold make sure the training data we feed to nnet is the same as that used in train()
-NNnet <- nnet(y~speed+bottom_depth+len+hour+bearing.rad,
-                  data=trainTransformed[index[[i]],],size=5,decay=0.1,
-                    lineout=F,na.action=na.omit,trace=F)
-NNnet$pred <- predict(NNnet,trainTransformed[-index[[i]],],type="class")
-rocs[[i]]<- AUC::auc(roc(NNnet$pred,trainTransformed[-index[[i]],]$y))
-}
-unlist(rocs)
-```
-
-Pretty clear that the ROC we calculated using:
-
-* nnet() --> predict() --> AUC::
-
-#### nnet() and train() without NAs
-
-Here, I just want to see if the NAs in the data are causing funky thing....maybe I just don't really understand how the prediction phase is treating NAs.
-
-Let's repeat the expiriment we did above but sanitize the data first.
-
-```{r}
-newtraining <- df.train[complete.cases(df.train),] 
-newtesting <- df.test[complete.cases(df.test),]
-
-# pre process the data....only the continuous variables
-preProcValues <- preProcess(newtraining, method = c("range"))
-trainTransformed <- predict(preProcValues, newtraining)
-testTransformed <- predict(preProcValues, newtesting)
-
-preProcValues
-
-#confirm there are no NAs in the new data
-sum(is.na(newtraining))
-sum(is.na(newtesting))
-```
-
-
-```{r}
-# set up control parameters for the neural network
-fitControl <- trainControl(method = "cv", 
-                           number = 5, 
-                           classProbs = TRUE, 
-                           summaryFunction = twoClassSummary)
-
-# make the hyper-parameter grid pretty small so it doesn't run forever
-nnetGrid <-  expand.grid(size = seq(from = 5, to = 5, by = 1),
-                         decay = seq(from = 0.1, to = 0.1, by = 0.1))
-
-NNcaret <- train(y ~ ., 
-                 data = newtraining,
-                 method = "nnet",
-                 metric = "ROC",
-                 trControl = fitControl,
-                 tuneGrid = nnetGrid,
-                 na.action=na.omit,
-                 trace=F,
-                 verbose = FALSE)
-
-index <- NNcaret$control$index
-str(index)
-
-NNcaret$resample
-```
-
-```{r}
-# Now use the familiar nnet() --> predict() --> ROC
-
-rocs <- list()
-for(i in 1:5){
-# for each fold make sure the training data we feed to nnet is the same as that used in train()
-NNnet <- nnet(y~speed+bottom_depth+len+hour+bearing.rad,
-                  data=trainTransformed[index[[i]],],size=5,decay=0.1,
-                    lineout=F,na.action=na.omit,trace=F)
-NNnet$pred <- predict(NNnet,trainTransformed[-index[[i]],],type="class")
-rocs[[i]]<- AUC::auc(roc(NNnet$pred,trainTransformed[-index[[i]],]$y))
-}
-unlist(rocs)
-```
-
-
-I know I've almost beaten this to death but before it rolls over completely let's see if repeated Cross-Validation with resampling gives us more consistent results between the two approaches.
-
-```{r}
-t <- Sys.time()
-# set up control parameters for the neural network
-fitControl <- trainControl(method = "repeatedcv", 
-                           number = 5, 
-                           repeats = 10,
-                           classProbs = TRUE, 
-                           summaryFunction = twoClassSummary)
-
-# make the hyper-parameter grid pretty small so it doesn't run forever
-nnetGrid <-  expand.grid(size = seq(from = 5, to = 5, by = 1),
-                         decay = seq(from = 0.1, to = 0.1, by = 0.1))
-
-NNcaret <- train(y ~ ., 
-                 data = trainTransformed,
-                 method = "nnet",
-                 metric = "ROC",
-                 trControl = fitControl,
-                 tuneGrid = nnetGrid,
-                 na.action=na.omit,
-                 trace=F,
-                 verbose = FALSE)
-Sys.time() - t
-NNcaret
-```
 
 

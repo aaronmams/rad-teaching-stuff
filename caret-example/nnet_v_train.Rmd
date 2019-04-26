@@ -185,9 +185,123 @@ I'm going to do the 5 Fold CV 3 ways:
 
 Approaches #2 and #3 will rank models based on ROC average across the 5 folds.  I assume that caret::train() also uses some kind of score averaging across CV folds to compute a model performance metric. 
 
+First, make another manageable dataset from the larger data set.  I'm going to simplify this example by removing all the NA values before hand.
+
+```{r}
+df.comp <- trainTransformed[complete.cases(trainTransformed),]
+idx <- createDataPartition(df.comp$y,p=0.1,list=F,times=1)
+df.comp <- df.comp[idx,]
+nrow(df.comp)
+df.comp %>% group_by(y) %>% summarise(count=n())
+```
 
 
+### Method 1
 
+This is the pretty straight forward method utilizing caret.
+
+```{r}
+t <- Sys.time()
+# set up control parameters for the neural network
+fitControl <- trainControl(method = "cv", 
+                           number = 5, 
+                           classProbs = TRUE, 
+                           summaryFunction = twoClassSummary)
+
+
+mod1 <- train(y ~ speed + bottom_depth + len + hour + bearing.rad, 
+                 data = df.comp,
+                 method = "nnet",
+                 maxit= 1000,
+                 metric = "ROC",
+                 trControl = fitControl,
+                 tuneGrid = nnetGrid,
+                 na.action=na.omit,
+                 trace=F,
+                 verbose = FALSE)
+
+Sys.time() - t
+```
+
+
+### Model 2 and 3
+
+Model 2 is the method where we invoke the following pipeline:
+
+caret::createFolds() --> set hyper-params --> nnet() --> caret::twoClassSummary()
+
+Model 3 is the 'mostly' caret independent process:
+
+caret::createFolds() --> set hyper-params --> nnet() --> AUC::auc(roc())
+ 
+Note that Model 3 is nested within the code for model 2 as the only thing that is really different between them is that Model 2 uses caret::twoClassSummary() to compute ROC and Model 3 uses AUC::auc(roc()) to compute ROC. 
+
+```{r}
+t <- Sys.time()
+
+
+    # create CV folds by hand
+    df.comp$fold <- createFolds(df.comp$y,k=5,list=F)
+    df.comp <- df.comp %>% mutate(obs=factor(ifelse(y=='fishing','class1','class2'))) %>% select(-y)
+    # set up a list to collect ROC values
+    roc <- list()
+
+    for(iparam in 1:nrow(nnetGrid)){
+      size.now <- nnetGrid$size[iparam]
+      decay.now <- nnetGrid$decay[iparam]
+      
+      roc.fold <- list()
+      for(k in 1:5){
+        
+        train <- df.comp[df.comp$fold!=k,]
+        test <- df.comp[df.comp$fold==k,]
+        mod <- nnet(obs ~ speed + bottom_depth + len + hour + bearing.rad, 
+                    data = train,
+                    size=size.now,
+                    decay=decay.now,
+                    maxit=1000,
+                    lineout=F,
+                    trace=F)
+        
+        test$pred <- predict(mod,test,type="class")
+        test$classprob <- predict(mod,test,type="raw")
+#------------------------------------------------------------------        
+# massage some stuff to be able to use the twoClassSummary() function
+        
+        tmp <- data.frame(pred=test$pred,
+                          obs=test$obs,
+                          class1=1-test$classprob,
+                          class2=test$classprob)
+        
+        classes = c('class1','class2')
+        
+        roc.tmp1 <- twoClassSummary(tmp, lev = classes)[1]
+#----------------------------------------------------------------
+
+      # Now just get ROC from the AUC library         
+      roc.tmp2<- AUC::auc(roc(test$pred,test$obs))
+      roc.fold[[k]] <- data.frame(size=size.now,decay=decay.now,ROC=c(roc.tmp1,roc.tmp2),
+                                  method=c('ROCcaret','ROC-AUC'))  
+      }
+      roc[[iparam]] <- data.frame(rbindlist(roc.fold))      
+    }
+Sys.time() - t
+    
+```
+
+We can view the optimal networks from approaches 2 and 3 by manipulating the list result from the code chunk above:
+
+```{r}
+roc <- tbl_df(data.frame(rbindlist(roc))) %>% group_by(size,decay,method) %>%  
+           summarise(ROC=mean(ROC)) %>% arrange(method,-ROC)
+roc         
+```
+
+We can view the optimal model from approach 1 by:
+
+```{r}
+mod1
+```
 
 
 

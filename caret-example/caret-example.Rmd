@@ -42,7 +42,8 @@ to highlight how functions in the caret library can be combined to establish a m
 * gbm - stochastic gradient boosting
 * caret - training predictive models
 
-```{r warnings=F}
+```{r echo=F,warnings=F}
+rm(list=ls())
 library(dplyr)
 library(data.table)
 library(ggplot2)
@@ -70,6 +71,12 @@ df <- tbl_df(read.csv('fishing_data.csv')) %>%
 str(df)
 ```
 
+Make the target variable a factor rather than [0,1]...many of the ML libraries in R don't like numeric target variable for two-class prediction problems.
+
+```{r}
+df <- df %>% mutate(y=factor(ifelse(fishing==0,'notfishing','fishing')))
+levels(df$y)
+```
 The object of the empirical exercise is to train a model capable of classifying an unlabeled observation as either "fishing" or "not fishing".  The features we have available for our modeling exercise are:
 
 * Outcome Variable/Target Variable
@@ -99,8 +106,10 @@ I also like [this ebook specifically on Neural Networks](http://www.dkriesel.com
 
 Again, a great place to start is [Hastie, Tibshirani, and Freidman](https://web.stanford.edu/~hastie/Papers/ESLII.pdf). Gradient Boosting isn't as well contained as Neural Networks and the concepts kind of pops up in a lot of places.  Chapter 10 is a pretty good place to start for readers interested in gradient boosting trees.
 
+
 [Here are some slides](https://homes.cs.washington.edu/~tqchen/pdf/BoostedTree.pdf) from a Computer Science Lecture at U. Washington that I think give a nice overview and reasonably rigorous presentation of GBM.
- 
+
+[Here is a neat hands-on](http://uc-r.github.io/gbm_regression) vignette. 
 
 # Training the Models with CARET
 
@@ -120,8 +129,8 @@ df <- df %>% ungroup() %>% mutate(len=as.factor(as.numeric(cut(len,5))),
 
 # make the data set smaller so we can deal with it
 df <- df %>% filter(year(local_time) == 2014 & month(local_time) %in% c(7,8,9)) %>% 
-  select(fishing,speed,bottom_depth,len,hour,bearing.rad) %>%
-  mutate(y=fishing) %>% select(-fishing)
+  select(y,fishing,speed,bottom_depth,len,hour,bearing.rad) %>%
+  select(-fishing)
 
 str(df)
 ```
@@ -137,14 +146,14 @@ The caret library has a *createDataPartition()* method that can split your data 
 #--------------------------------------------------------------------
 #create the training and testing data
 index <- createDataPartition(df$y,p=0.8,list=F,times=1)
-df.train <- df[index,] %>% mutate(y=as.factor(y))
-levels(df.train$y) <- c('notfishing','fishing') 
-df.test <- df[-index,] %>% mutate(y=as.factor(y))
-levels(df.test$y) <- c('notfishing','fishing')  
+df.train <- df[index,]
+df.test <- df[-index,]  
 #--------------------------------------------------------------------
 
 str(df.train)
 str(df.test)
+
+levels(df.train$y)
 ```
 
 Let's have a quick look at the target variables in the training and testing sets:
@@ -155,7 +164,7 @@ df.test %>% group_by(y) %>% summarise(count=n())
 
 ```
 
-"Fishing" observations are about 27% of the training and testing data...so that's cool.
+"Fishing" observations are in the neighborhood of 20-25% of the training and testing data...so that's cool.
 
 The caret library is pretty flexible and has some cool options for other sampling schemes if balancing class distributions isn't your thing:
 
@@ -276,16 +285,16 @@ nn2 <- nnet(y~.,data=trainTransformed,size=5,linout=F,na.action=na.omit,trace=F)
 nn2
 ```
 
-For illustrative purposes, just look at the object types:
+For illustrative purposes, just look at the list objects returned by train() and nnet():
 
 ```{r}
-class(nnetFit)
-class(nn2)
+names(nnetFit$finalModel)
+
 ```
 
 
 ```{r}
-nn2
+names(nn2)
 ```
 
 To restate the obvious:
@@ -294,200 +303,16 @@ To restate the obvious:
 
 * nn2 is list object containing the results of a single call to the *nnet()* function
 
-The relationship between caret::train() and nnet::nnet() can be illustrated with the following code:
-
-```{r}
-library(AUC)
-
-# first I'm going to make a copy of the training data just so this doesn't get
-# too confusing
-dat <- trainTransformed
-dat$fold <- createFolds(dat$y,k=5,list=F)
-
-
-# replicate the hyper-parameter grid from above
-size <- seq(from = 5, to = 8, by = 1)
-decay <-  seq(from = 0.1, to = 0.2, by = 0.1)
-
-# loop through the hyper-parameters + CV folds 
-roc.mod <- list()
-counter <- 0
-  for(i in size){ 
-    for(j in decay){
-      counter <- counter + 1
-      roc.fold <- list()
-      for(k in unique(dat$fold)){
-        
-      train <- dat[dat$fold != k,]
-      test <- dat[dat$fold == k,]
-      res <- nnet(y~speed+bottom_depth+len+hour+bearing.rad,
-                  data=train,size=i,lineout=F,na.action=na.omit,trace=F)
-      test$pred <- predict(res,test,type="class")
-      
-      roc.fold[[k]]<- AUC::auc(roc(test$pred,test$y))
-      #plot(roc(test$pred,test$y))
-      
-      }
-    roc.mod[[counter]] <- c(size=i,decay=j,ROC=mean(unlist(roc.fold)))  
-  }   
-  }
-roc.mod <- matrix(unlist(roc.mod),nc=3,byrow=T)
-colnames(roc.mod) <- c('size','decay','ROC')
-roc.mod
-```
-
-### nnet and train()
-
-For the simplified example above I actual get a different 'best' model doing 5 Fold CV by hand than if I use the train() function.  This could just be a feature of sampling schemes used to create the folds.  Let's try a comparison using the same folds.
-
-First, look at really simple *train()* object:
-
-```{r}
-# set up control parameters for the neural network
-fitControl <- trainControl(method = "cv", 
-                           number = 5, 
-                           classProbs = TRUE, 
-                           summaryFunction = twoClassSummary)
-
-# make the hyper-parameter grid pretty small so it doesn't run forever
-nnetGrid <-  expand.grid(size = seq(from = 5, to = 5, by = 1),
-                         decay = seq(from = 0.1, to = 0.1, by = 0.1))
-
-NNcaret <- train(y ~ ., 
-                 data = trainTransformed,
-                 method = "nnet",
-                 metric = "ROC",
-                 trControl = fitControl,
-                 tuneGrid = nnetGrid,
-                 na.action=na.omit,
-                 trace=F,
-                 verbose = FALSE)
-NNcaret
-```
-
-
-```{r}
-index <- NNcaret$control$index
-str(index)
-
-NNcaret$resample
-```
-
-Now we want to make sure we do a 5 Fold CV using the same folds but training the model using *nnet()* instead of caret::train().
-
-```{r}
-rocs <- list()
-for(i in 1:5){
-# for each fold make sure the training data we feed to nnet is the same as that used in train()
-NNnet <- nnet(y~speed+bottom_depth+len+hour+bearing.rad,
-                  data=trainTransformed[index[[i]],],size=5,decay=0.1,
-                    lineout=F,na.action=na.omit,trace=F)
-NNnet$pred <- predict(NNnet,trainTransformed[-index[[i]],],type="class")
-rocs[[i]]<- AUC::auc(roc(NNnet$pred,trainTransformed[-index[[i]],]$y))
-}
-unlist(rocs)
-```
-
-Pretty clear that the ROC we calculated using:
-
-* nnet() --> predict() --> AUC::
-
-#### nnet() and train() without NAs
-
-Here, I just want to see if the NAs in the data are causing funky thing....maybe I just don't really understand how the prediction phase is treating NAs.
-
-Let's repeat the expiriment we did above but sanitize the data first.
-
-```{r}
-newtraining <- df.train[complete.cases(df.train),] 
-newtesting <- df.test[complete.cases(df.test),]
-
-# pre process the data....only the continuous variables
-preProcValues <- preProcess(newtraining, method = c("range"))
-trainTransformed <- predict(preProcValues, newtraining)
-testTransformed <- predict(preProcValues, newtesting)
-
-preProcValues
-
-#confirm there are no NAs in the new data
-sum(is.na(newtraining))
-sum(is.na(newtesting))
-```
-
-
-```{r}
-# set up control parameters for the neural network
-fitControl <- trainControl(method = "cv", 
-                           number = 5, 
-                           classProbs = TRUE, 
-                           summaryFunction = twoClassSummary)
-
-# make the hyper-parameter grid pretty small so it doesn't run forever
-nnetGrid <-  expand.grid(size = seq(from = 5, to = 5, by = 1),
-                         decay = seq(from = 0.1, to = 0.1, by = 0.1))
-
-NNcaret <- train(y ~ ., 
-                 data = trainTransformed,
-                 method = "nnet",
-                 metric = "ROC",
-                 trControl = fitControl,
-                 tuneGrid = nnetGrid,
-                 na.action=na.omit,
-                 trace=F,
-                 verbose = FALSE)
-
-index <- NNcaret$control$index
-str(index)
-
-NNcaret$resample
-
-# Now use the familiar nnet() --> predict() --> ROC
-
-rocs <- list()
-for(i in 1:5){
-# for each fold make sure the training data we feed to nnet is the same as that used in train()
-NNnet <- nnet(y~speed+bottom_depth+len+hour+bearing.rad,
-                  data=trainTransformed[index[[i]],],size=5,decay=0.1,
-                    lineout=F,na.action=na.omit,trace=F)
-NNnet$pred <- predict(NNnet,trainTransformed[-index[[i]],],type="class")
-rocs[[i]]<- AUC::auc(roc(NNnet$pred,trainTransformed[-index[[i]],]$y))
-}
-unlist(rocs)
-```
-
-
-I know I've almost beaten this to death but before it rolls over completely let's see if repeated Cross-Validation with resampling gives us more consistent results between the two approaches.
-
-```{r}
-t <- Sys.time()
-# set up control parameters for the neural network
-fitControl <- trainControl(method = "repeatedcv", 
-                           number = 5, 
-                           repeats = 10,
-                           classProbs = TRUE, 
-                           summaryFunction = twoClassSummary)
-
-# make the hyper-parameter grid pretty small so it doesn't run forever
-nnetGrid <-  expand.grid(size = seq(from = 5, to = 5, by = 1),
-                         decay = seq(from = 0.1, to = 0.1, by = 0.1))
-
-NNcaret <- train(y ~ ., 
-                 data = trainTransformed,
-                 method = "nnet",
-                 metric = "ROC",
-                 trControl = fitControl,
-                 tuneGrid = nnetGrid,
-                 na.action=na.omit,
-                 trace=F,
-                 verbose = FALSE)
-Sys.time() - t
-NNcaret
-```
-
 
 ### GBM
 
 ```{r}
+
+gbmGrid <-  expand.grid(interaction.depth = c(1, 5, 9), 
+                        n.trees = (1:30)*50, 
+                        shrinkage = 0.1,
+                        n.minobsinnode = 20)
+t <- Sys.time()
 # tree-based methods generally don't need input scaling
 gbmFit <- train(y ~ ., 
                 #data = trainTransformed,
@@ -495,10 +320,86 @@ gbmFit <- train(y ~ .,
                 method = "gbm",
                 metric = "ROC",
                 trControl = fitControl.GBM,
+                tuneGrid = gbmGrid,
                 na.action = na.omit,
                 verbose = FALSE)
 Sys.time() - t
 #-------------------------------------------------------------------------
 
 ```
+
+See what the train()-gbm() output looks like:
+
+```{r}
+names(gbmFit)
+```
+
+
+```{r}
+names(gbmFit$finalModel)
+```
+
+
+## Prediction
+
+Using the optimal models - where optimal is defined as the best model in each class conditional on our tuning parameters - we can generate predicted values for the observations in the testing data.  This is done pretty simply using [predict.train()](https://www.rdocumentation.org/packages/caret/versions/5.05.004/topics/predict.train) method, which provides a wrapper to prediction functions associated with each model.
+
+```{r}
+testTransformed <- testTransformed[complete.cases(testTransformed),]
+df.test <- df.test[complete.cases(df.test),]
+#-------------------------------------------------------------------------
+# make predictions
+NNpredictions <- predict(nnetFit,testTransformed)
+GBMpredictions <- predict(gbmFit,df.test)
+
+#--------------------------------------------------------------------------
+```
+
+
+This probably isn't a huge deal but note that we washed out the NA values from the testing data before calling to the predict() function.  We could have added an ```na.action=na.omit``` option to the ```predict()``` call but, honestly, this seems to me to just complicate thing unnecessarily.  What I mean by that is this:
+
+```predict(nnetmodel,newdata=,na.action=na.omit)``` is going to return a vector of predictions with size ```nrow(testTransformed) - nrow(testTransformed[complete.cases(testTransformed),])```.  To get the confusion matrix, which we want in order to evaluate the two model classes (neural network v. GBM), we need to line up observed outcomes from the testing data with the prediction.  I guess we could just index the testing data so that ```nrow(testTransformed)=length(NNpredictions)```.  But that doesn't strike me as any more elegant or sensible than just removing NAs from the data before calling ```predict()```.
+
+
+```{r}
+
+Net_CM <- confusionMatrix(NNpredictions,testTransformed$y)
+GBM_CM <- confusionMatrix(GBMpredictions,df.test$y)
+
+Net_CM
+GBM_CM
+```
+
+
+```{r}
+#f1 score for the ANN
+p <- Net_CM$table[2,2]/(Net_CM$table[2,2] + Net_CM$table[2,1])
+r <- Net_CM$table[2,2]/(Net_CM$table[2,2] + Net_CM$table[1,2])
+(2*p*r)/(p+r)
+
+#f1 score for the GBM
+p <- GBM_CM$table[2,2]/(GBM_CM$table[2,2] + GBM_CM$table[2,1])
+r <- GBM_CM$table[2,2]/(GBM_CM$table[2,2] + GBM_CM$table[1,2])
+(2*p*r)/(p+r)
+
+```
+
+
+
+
+
+
+The [gbm library](https://cran.r-project.org/web/packages/gbm/gbm.pdf) has built-in variable importance methods which can be used to visualize some interesting features of the optimal gbm model:
+
+```{r}
+vars <- varImp(gbmFit, scale = FALSE)
+plot(vars)
+```
+
+
+```{r}
+plotnet(nnetFit)
+```
+
+
 

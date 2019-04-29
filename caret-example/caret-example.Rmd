@@ -340,7 +340,7 @@ names(gbmFit$finalModel)
 ```
 
 
-## Prediction
+# Prediction
 
 Using the optimal models - where optimal is defined as the best model in each class conditional on our tuning parameters - we can generate predicted values for the observations in the testing data.  This is done pretty simply using [predict.train()](https://www.rdocumentation.org/packages/caret/versions/5.05.004/topics/predict.train) method, which provides a wrapper to prediction functions associated with each model.
 
@@ -385,9 +385,12 @@ r <- GBM_CM$table[2,2]/(GBM_CM$table[2,2] + GBM_CM$table[1,2])
 ```
 
 
+# Some Fun Post-Processing Visualization
 
+There are plenty of model diagnostic methods available in caret.  [See Chapters 15 and 18-22](https://topepo.github.io/caret/variable-importance.html).  I'm just going to a quick demo of two:
 
-
+1. plotting variable importance from the GBM models, and
+2. visualizing the optimal ANN using the [plotnet add-on](https://www.rdocumentation.org/packages/NeuralNetTools/versions/1.5.2/topics/plotnet)
 
 The [gbm library](https://cran.r-project.org/web/packages/gbm/gbm.pdf) has built-in variable importance methods which can be used to visualize some interesting features of the optimal gbm model:
 

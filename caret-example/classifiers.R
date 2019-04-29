@@ -87,6 +87,7 @@ gbmFit <- train(y ~ .,
                 method = "gbm",
                 metric = "ROC",
                 trControl = fitControl.GBM,
+                na.action = na.omit,
                 verbose = FALSE)
 Sys.time() - t
 #-------------------------------------------------------------------------

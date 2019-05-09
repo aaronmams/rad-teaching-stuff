@@ -191,7 +191,8 @@ Caret has a *preProcess()* function for this.  It works like this:
 # pre process the data....only the continuous variables
 preProcValues <- preProcess(df.train, method = c("range"))
 trainTransformed <- predict(preProcValues, df.train)
-testTransformed <- predict(preProcValues, df.test)
+preProctest <- preProcess(df.test,method=c("range"))
+testTransformed <- predict(preProctest, df.test)
 
 preProcValues
 ```

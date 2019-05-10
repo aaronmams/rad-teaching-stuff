@@ -56,7 +56,7 @@ library(NeuralNetTools)
 
 # Empirical Setting
 
-These data come from a satellite monitoring system that tracks the location of commercial fishing vessels in the U.S.  These data are logged on hourly intervals and record a vessels location in lat/long coordinates and a time stamp.  
+These data come from a satellite monitoring system that tracks the location of commercial fishing vessels in the U.S.  These data are logged on hourly intervals and record a vessel's location in lat/long coordinates and provide a time stamp.  
 
 In a separate process I have joined these data with a bathymetry grid to get the ocean bottom depth associated with each set of lat/long coordinates.  I have also joined these data with a secondary data source containing captains logs recorded during fishing operations.  By joining the positional data with the captain's logs I was able to create a variable indicating whether the vessel was actively fishing during the time the observation was taken.
 
@@ -71,7 +71,7 @@ df <- tbl_df(read.csv('fishing_data.csv')) %>%
 str(df)
 ```
 
-Make the target variable a factor rather than [0,1]...many of the ML libraries in R don't like numeric target variable for two-class prediction problems.
+One quick change I'm going to make here is to make the target variable a factor rather than [0,1]...many of the ML libraries in R don't like numeric target variable for two-class prediction problems.
 
 ```{r}
 df <- df %>% mutate(y=factor(ifelse(fishing==0,'notfishing','fishing')))
@@ -92,7 +92,7 @@ The object of the empirical exercise is to train a model capable of classifying 
   
 # The Models
 
-I don't intend to discuss the particulars of ANNs and Gradient Boosting here.  I'm assuming a decent level of familiarity with these models and concepts so I can focus on the details of using the [caret](http://topepo.github.io/caret/index.html) library to train the models.  Check out the links below to dive into the models
+I don't intend to discuss the particulars of ANNs and Gradient Boosting here.  I'm assuming a decent level of familiarity with these models and concepts so I can focus on the details of using the [caret](http://topepo.github.io/caret/index.html) library to train the models.  Check out the links below to dive into the models:
 
 ## ANNs
 
@@ -278,6 +278,7 @@ Sys.time() - t
 nnetFit$finalModel
 ```
 
+Here's something worth noticing (maybe it matters a lot maybe it doesn't matter at all): The ```nnet()``` method actually does a little behind-the-scenes variable transformation.  Specifically, it takes the categorical variables *len* and *hour* and uses [one hot encoding](https://en.wikipedia.org/wiki/One-hot) to create a set of binary variables.
 
 Just to further illuminate the crucial relationship here, I'm going to use the *nnet()* function from the [nnet](https://cran.r-project.org/web/packages/nnet/nnet.pdf) package directly and compare.
 
@@ -388,7 +389,7 @@ r <- GBM_CM$table[2,2]/(GBM_CM$table[2,2] + GBM_CM$table[1,2])
 
 # Some Fun Post-Processing Visualization
 
-There are plenty of model diagnostic methods available in caret.  [See Chapters 15 and 18-22](https://topepo.github.io/caret/variable-importance.html).  I'm just going to a quick demo of two:
+There are plenty of model diagnostic methods available in caret.  [See Chapters 15 and 18-22](https://topepo.github.io/caret/variable-importance.html).  I'm just going to do a quick demo of two:
 
 1. plotting variable importance from the GBM models, and
 2. visualizing the optimal ANN using the [plotnet add-on](https://www.rdocumentation.org/packages/NeuralNetTools/versions/1.5.2/topics/plotnet)

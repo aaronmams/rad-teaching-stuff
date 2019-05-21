@@ -1,6 +1,8 @@
 ---
 title: "A Short Machine Learning Essay using the Caret Library"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
 
 From the [Caret Bookdown by Max Kuhn](https://topepo.github.io/caret/index.html): 
@@ -14,6 +16,8 @@ From the [Caret Bookdown by Max Kuhn](https://topepo.github.io/caret/index.html)
 * variable importance estimation
 
 >as well as other functionality.
+
+[Data Analysis](/Users/aaronmamula/Documents/R projects/rad-teaching-stuff/caret-example/figures/xkcd_comic.png)
 
 # Introduction
 
@@ -30,6 +34,8 @@ to highlight how functions in the caret library can be combined to establish a m
 1. pre-processing data (normalizing continuous variables, one-hot encoding)
 2. dealing with NAs or outliers
 3. examining final models visually
+
+[Data Pipeline](/Users/aaronmamula/Documents/R projects/rad-teaching-stuff/caret-example/figures/datapipeline.png)
 
 ## Dependencies
 

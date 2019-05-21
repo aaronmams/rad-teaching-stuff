@@ -1,6 +1,8 @@
 ---
 title: "A closer look at nnet() and caret::train()"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
 
 The purpose of this workbook is to enhance understanding of the caret library by looking at two ways to estimate a neural network that should be roughly equivilent.  The first approach uses caret to train a neural network using [nnet::nnet()](https://cran.r-project.org/web/packages/nnet/nnet.pdf).  The second uses the *nnet()* function directly.   
@@ -17,6 +19,8 @@ library(nnet)
 library(lubridate)
 library(gbm)
 library(NeuralNetTools)
+library(AUC)
+
 ```
 
 # Data Set Up
@@ -240,15 +244,15 @@ Sys.time() - t
 
 ## Method 2 and 3
 
-Model 2 is the method where we invoke the following pipeline:
+Method 2 is the method where we invoke the following pipeline:
 
 >caret::createFolds() --> set hyper-params --> nnet() --> caret::twoClassSummary()
 
-Model 3 is the 'mostly' caret independent process:
+Method 3 is the 'mostly' caret independent process:
 
 >caret::createFolds() --> set hyper-params --> nnet() --> AUC::auc(roc())
  
-Note that Model 3 is nested within the code for model 2 as the only thing that is really different between them is that Model 2 uses caret::twoClassSummary() to compute ROC and Model 3 uses AUC::auc(roc()) to compute ROC. 
+Note that Method 3 is nested within the code for model 2 as the only thing that is really different between them is that Method 2 uses caret::twoClassSummary() to compute ROC and Method 3 uses AUC::auc(roc()) to compute ROC. 
 
 ```{r}
 t <- Sys.time()
